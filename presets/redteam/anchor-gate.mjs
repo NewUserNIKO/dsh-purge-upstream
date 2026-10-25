@@ -3,7 +3,8 @@
  *
  * 只接梁神两阶段里这一段，不接两工具裁剪，也不切 PTC：
  * 第一段思考要像官方 Minimal（含 we、不含 let me）才放开输出上限；
- * 锚不住则最多 4 步。上限 1024 token，放开后拆掉，避免焊死在后面的请求上。
+ * 锚不住则最多 4 步。启动上限由 bootstrapMaxTokens 配置，且不超过调用方预算。
+ * 放开后保留调用方原始预算，不再施加启动上限。
  * 上下文压缩把模型可见的表面整段重写，压缩后再关上，直到新的锚点或再走满 4 步。
  *
  * 红队指挥和执行角色一直看见原来的工具和人设。放开之后，整篇工作区说明
@@ -122,6 +123,7 @@ function stateFor(session) {
       turnEnded: false,
       steps: 0,
       instructionHinted: false,
+      bootstrapBudget: undefined,
     }
     promotionBySession.set(session, state)
   }
@@ -204,11 +206,32 @@ export function apply(ctx, config = {}) {
     if (policy.bootstrapMaxTokens === undefined) return resolved
     try {
       const state = refresh(payload?.agent, policy)
-      if (state === undefined || state.promoted) {
-        if (state === undefined || resolved?.maxTokens !== policy.bootstrapMaxTokens) return resolved
-        const rest = { ...resolved }
-        delete rest.maxTokens
-        return rest
+      if (state === undefined) return resolved
+      // DSH seeds later requests from request/header, including our temporary cap.
+      // Only undo a cap this agent applied on this route; equal caller budgets
+      // that we never changed do not belong to the gate.
+      const previous = state.bootstrapBudget
+      const owned = previous !== undefined
+        && previous.agent === payload.agent
+        && previous.provider === resolved?.provider
+        && previous.model === resolved?.model
+        && previous.applied === resolved?.maxTokens
+      if (!owned) state.bootstrapBudget = undefined
+      if (state.promoted) {
+        if (!owned) return resolved
+        state.bootstrapBudget = undefined
+        const restored = { ...resolved }
+        if (previous.original === undefined) delete restored.maxTokens
+        else restored.maxTokens = previous.original
+        return restored
+      }
+      if (resolved?.maxTokens !== undefined && resolved.maxTokens <= policy.bootstrapMaxTokens) return resolved
+      state.bootstrapBudget = {
+        agent: payload.agent,
+        provider: resolved?.provider,
+        model: resolved?.model,
+        original: owned ? previous.original : resolved?.maxTokens,
+        applied: policy.bootstrapMaxTokens,
       }
       return { ...resolved, maxTokens: policy.bootstrapMaxTokens }
     } catch {

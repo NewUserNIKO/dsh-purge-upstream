@@ -139,6 +139,8 @@ This repo is [Apache License 2.0](./LICENSE). Forks and redistributions must kee
 
 Unmatched patches stay pending or skipped; nothing is rewritten blindly.
 
+For the reviewed Flash 4.1 1017 desktop configuration, output-budget behavior, and validation limits, see [Flash 1017 compatibility notes](docs/flash-1017.md).
+
 ---
 
 ## Install

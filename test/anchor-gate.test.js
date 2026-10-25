@@ -97,13 +97,41 @@ test('a changed caller budget replaces ownership of the earlier bootstrap cap', 
   assert.equal(await fixture.request(changed), changed)
 })
 
-test('a bootstrap cap is not restored into a different model or agent', async () => {
-  for (const change of ['model', 'agent']) {
-    const fixture = gate()
-    const capped = await fixture.request({ provider: 'deepseek-official', model: 'deepseek-flash', maxTokens: 16384 })
-    fixture.session.events.push({ type: 'assistant/message' })
-    const options = Object.freeze(change === 'model' ? { ...capped, model: 'fixture-other' } : capped)
-    const payload = change === 'agent' ? { agent: { session: fixture.session } } : undefined
-    assert.equal(await fixture.request(options, payload), options)
+test('a bootstrap cap is not restored into a new agent lifecycle', async () => {
+  const fixture = gate()
+  const capped = await fixture.request({ provider: 'deepseek-official', model: 'deepseek-flash', maxTokens: 16384 })
+  fixture.session.events.push({ type: 'assistant/message' })
+  const options = Object.freeze(capped)
+  assert.equal(await fixture.request(options, { agent: { session: fixture.session } }), options)
+})
+
+for (const budget of [undefined, 8192, 16384]) {
+  for (const timing of ['before-promotion', 'on-promotion']) {
+    test(`model switch ${timing} preserves original budget ${budget}`, async () => {
+      const fixture = gate()
+      const original = { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max',
+        ...(budget === undefined ? {} : { maxTokens: budget }) }
+      const capped = await fixture.request(original)
+      // DSH installModelSelection replaces the route/effort but keeps the header budget.
+      const changed = Object.freeze({ ...structuredClone(capped), provider: 'fixture-provider',
+        model: 'fixture-model', reasoningEffort: 'low' })
+      if (timing === 'before-promotion') assert.equal((await fixture.request(changed)).maxTokens, 8192)
+      fixture.session.events.push({ type: 'assistant/message' })
+      const restored = await fixture.request(changed)
+      const expected = { ...changed }
+      if (budget === undefined) delete expected.maxTokens
+      else expected.maxTokens = budget
+      assert.deepEqual(restored, expected)
+      assert.equal(await fixture.request(restored), restored)
+      assert.equal(changed.maxTokens, 8192)
+    })
   }
+}
+
+test('an explicit new budget on model switch supersedes the gate-owned budget', async () => {
+  const fixture = gate()
+  await fixture.request({ model: 'deepseek-flash', maxTokens: 16384 })
+  fixture.session.events.push({ type: 'assistant/message' })
+  const changed = Object.freeze({ model: 'fixture-other', maxTokens: 4096 })
+  assert.equal(await fixture.request(changed), changed)
 })

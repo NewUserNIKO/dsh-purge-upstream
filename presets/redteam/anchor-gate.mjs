@@ -208,13 +208,11 @@ export function apply(ctx, config = {}) {
       const state = refresh(payload?.agent, policy)
       if (state === undefined) return resolved
       // DSH seeds later requests from request/header, including our temporary cap.
-      // Only undo a cap this agent applied on this route; equal caller budgets
-      // that we never changed do not belong to the gate.
+      // Model selection preserves that budget, so ownership follows the agent
+      // across route changes. Equal caller budgets we never changed stay theirs.
       const previous = state.bootstrapBudget
       const owned = previous !== undefined
         && previous.agent === payload.agent
-        && previous.provider === resolved?.provider
-        && previous.model === resolved?.model
         && previous.applied === resolved?.maxTokens
       if (!owned) state.bootstrapBudget = undefined
       if (state.promoted) {
@@ -228,8 +226,6 @@ export function apply(ctx, config = {}) {
       if (resolved?.maxTokens !== undefined && resolved.maxTokens <= policy.bootstrapMaxTokens) return resolved
       state.bootstrapBudget = {
         agent: payload.agent,
-        provider: resolved?.provider,
-        model: resolved?.model,
         original: owned ? previous.original : resolved?.maxTokens,
         applied: policy.bootstrapMaxTokens,
       }

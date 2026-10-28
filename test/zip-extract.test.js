@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { extractZipArchive } from "../lib/zip-extract.js";
+import { extractZipArchive, extractZipBuffer } from "../lib/zip-extract.js";
+import { zipFixture } from "./helpers/zip-fixture.mjs";
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "purge-zip-test-"));
@@ -28,4 +29,26 @@ test("Node fallback refuses directory entries that escape the destination", asyn
   const archive = fileURLToPath(new URL("./fixtures/traversal.zip", import.meta.url));
   assert.throws(() => extractZipArchive(archive, path.join(root, "dest"), ["node"]), /Invalid zip path/);
   await assert.rejects(fs.stat(path.join(root, "escaped")), { code: "ENOENT" });
+});
+
+for (const tool of ["node", "python3", "tar", "unzip", "powershell", "buffer"]) {
+  test(`${tool}: archive symlinks are rejected before any file is extracted`, async (t) => {
+    const root = await fixture(t);
+    const archive = path.join(root, "candidate.zip");
+    const dest = path.join(root, "dest");
+    const bytes = zipFixture([
+      { name: "candidate/README.md", body: "must not be extracted" },
+      { name: "candidate/lib/index.js", body: "missing-target.js", mode: 0o120777 },
+    ]);
+    await fs.writeFile(archive, bytes);
+    assert.throws(() => tool === "buffer" ? extractZipBuffer(bytes, dest) : extractZipArchive(archive, dest, [tool]), /symbolic link|special file/i);
+    await assert.rejects(fs.stat(dest), { code: "ENOENT" });
+  });
+}
+
+test("archive special files are rejected before extraction", async (t) => {
+  const root = await fixture(t);
+  for (const mode of [0o010644, 0o020644, 0o060644, 0o140644]) {
+    assert.throws(() => extractZipBuffer(zipFixture([{ name: "candidate/special", mode }]), path.join(root, String(mode))), /special file/i);
+  }
 });

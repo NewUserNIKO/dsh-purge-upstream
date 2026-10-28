@@ -5,6 +5,8 @@ import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createContext, SourceTextModule, SyntheticModule } from 'node:vm'
 import { pathToFileURL } from 'node:url'
+import { zipFixture } from './zip-fixture.mjs'
+import { extractZipArchive } from '../../lib/zip-extract.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'purge-runtime-test-'))
 const sha = 'a'.repeat(40)
@@ -15,6 +17,7 @@ const dest = path.join(root, 'installed')
 const source = path.join(root, 'candidate')
 const profile = path.join(home, 'profiles', 'desktop')
 const mode = process.argv[2]
+const badArchiveTool = mode.startsWith('archive-symlink-') ? mode.slice('archive-symlink-'.length) : ''
 let spawned = 0
 let failedMetadata = false
 let commitQueries = 0
@@ -35,6 +38,22 @@ try {
   const oldChannel = JSON.stringify({ channel: 'beta', pin: 'v1.1.73' })
   fs.writeFileSync(channelFile, oldChannel)
 
+  let archiveBytes
+  if (badArchiveTool) {
+    const entries = []
+    function walk(dir, prefix) {
+      for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+        const name = prefix + '/' + item.name
+        if (item.isDirectory()) walk(path.join(dir, item.name), name)
+        else entries.push(name === 'candidate/lib/index.js'
+          ? { name, body: 'missing-target.js', mode: 0o120777 }
+          : { name, body: fs.readFileSync(path.join(dir, item.name)) })
+      }
+    }
+    walk(source, 'candidate')
+    archiveBytes = zipFixture(entries)
+  }
+
   function request(input, options, callback) {
     const url = String(input)
     calls.push(url)
@@ -53,7 +72,7 @@ try {
         body = JSON.stringify({ sha: commitQueries === 1 ? sha : otherSha })
       } else if (url.includes('/compare/')) body = JSON.stringify({ status: 'behind' })
       else if (url.endsWith('.atom')) body = `<id>tag:github.com,2008:Grit::Commit/${sha}</id>`
-      else if (url.includes('codeload.github.com/')) body = 'fixture archive bytes'
+      else if (url.includes('codeload.github.com/')) body = archiveBytes || 'fixture archive bytes'
       else if (url.includes('package.json')) body = JSON.stringify(pkg)
       else { res.statusCode = 404; body = '{}' }
       callback(res)
@@ -86,6 +105,7 @@ try {
       ...(await import(specifier)), spawnSync: () => { spawned += 1; throw new Error('host execution forbidden') },
     }
     else if (specifier === './zip-extract.js') namespace = { extractZipArchive: (_zip, output) => {
+      if (badArchiveTool) return extractZipArchive(_zip, output, [badArchiveTool])
       fs.cpSync(source, path.join(output, 'archive-root'), { recursive: true })
     } }
     else namespace = await import(specifier.startsWith('.') ? new URL('../../lib/' + specifier.slice(2), import.meta.url).href : specifier)
@@ -112,7 +132,14 @@ try {
     assert.equal(fs.readFileSync(channelFile, 'utf8'), oldChannel, 'read-only discovery must not rewrite channel state')
   } else {
     const pending = updater.namespace.applyUpdate([{ kind: 'dsh', dir: dest, profileDir: profile }])
-    if (mode === 'metadata-failure') {
+    if (badArchiveTool) {
+      await assert.rejects(pending, /symbolic link|special file/i)
+      assert.equal(fs.readFileSync(path.join(dest, 'README.md'), 'utf8'), 'old installation')
+      assert.equal(fs.readFileSync(profileFile, 'utf8'), oldProfile)
+      assert.equal(fs.readFileSync(channelFile, 'utf8'), oldChannel)
+      assert.equal(fs.existsSync(path.join(home, 'dsh-purge/installed-rev')), false)
+      assert.equal(fs.existsSync(path.join(home, 'dsh-purge/update-backups')), false)
+    } else if (mode === 'metadata-failure') {
       await assert.rejects(pending, (error) => error.rolledBack === true)
       assert.equal(fs.readFileSync(path.join(dest, 'README.md'), 'utf8'), 'old installation')
       assert.equal(fs.readFileSync(profileFile, 'utf8'), oldProfile)

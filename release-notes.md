@@ -5,7 +5,7 @@
 - 版本 **1.1.73**，适配 DSH **0.2.1-rc.2**（0.2.0 仍可用）。
 - 0.2.1 兼容已落地：`{{cwd}}` 静态回退、补丁 #40、`toolFilter` 删除、`dsh-tools` 解析、hostFs fd 直通、桌面换包不自杀、`file:` 归档更新、Ctrl+Enter steer。
 - 界面操作文案补齐英文（演练台、清洗面板、补丁表、计分/技能指引）；`zh` 语言包与模型提示词保持中文。靶场默认拦截的 `own.hint` 仍按本仓库策略。
-- 随包技能 `paper-autopilot` + `npm run install:skill`。
+- 提供技能导入与管理功能；开源包不附带技能库，也没有 `install:skill` 脚本。
 - 红队证据账本：`claimed → observed` 核实链、`ResidualUnknown`、8 个 `redteam_evidence_*` / `redteam_unknown_*` 工具。
 
 ## English
@@ -13,7 +13,7 @@
 - **1.1.73**, target DSH **0.2.1-rc.2** (0.2.0 still works).
 - 0.2.1 compatibility in-tree: `{{cwd}}` fallback, patch #40, drop `toolFilter`, host `dsh-tools` resolve, hostFs fd pass-through, desktop helper self-kill fix, `file:` archive update, Ctrl+Enter steer.
 - Operator-facing UI copy is English; `zh` locale and model prompts stay Chinese. Lab default-deny `own.hint` is unchanged.
-- Bundled `paper-autopilot` skill + `npm run install:skill`.
+- Skill import and management are available; the open-source package includes no bundled skill library or `install:skill` script.
 - Red-team evidence ledger: claimed→observed verification, ResidualUnknown, eight `redteam_evidence_*` / `redteam_unknown_*` tools.
 
 # 1.1.71

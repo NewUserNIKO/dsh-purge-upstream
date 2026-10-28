@@ -1,0 +1,24 @@
+name: Regression tests
+
+on:
+  pull_request:
+  push:
+    branches: [master, "codex/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # The regression suite uses only Node built-ins and temporary fixtures.
+      - run: npm test

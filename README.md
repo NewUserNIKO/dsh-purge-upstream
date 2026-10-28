@@ -141,6 +141,8 @@ Unmatched patches stay pending or skipped; nothing is rewritten blindly.
 
 For the reviewed Flash 4.1 1017 desktop configuration, output-budget behavior, and validation limits, see [Flash 1017 compatibility notes](docs/flash-1017.md).
 
+This personal fork updates only from its protected review branch, with backups and rollback on handled failures. File updates do not run host Apply or restart DSH. See [safe fork updates](docs/safe-fork-updates.md) for source policy, backup locations, and recovery limits.
+
 ---
 
 ## Install

@@ -239,6 +239,8 @@ window.__ModuleLoader__.load({ id: "dsh-purge", factory: (require) => {
 			"update.available": "有新版本 {remote}，当前 {local}",
 			"update.pinned": "已固定在 {version}，通道最新是 {remote}",
 			"update.done": "已更新到 {version}",
+			"update.filesDone": "插件文件已更新；请在需要时手动重新加载并应用补丁。当前宿主继续运行。",
+			"update.backup": "备份：{path}",
 			"update.restarting": "已还原并写入新补丁，正在重启…",
 			"update.fullQuit": "补丁已写入。点「重启」后客户端会自己重新打开。",
 			"restart.official.title": "需要重启",
@@ -583,6 +585,8 @@ window.__ModuleLoader__.load({ id: "dsh-purge", factory: (require) => {
 			"update.available": "Update {remote} available (now {local})",
 			"update.pinned": "Pinned at {version}; channel latest is {remote}",
 			"update.done": "Updated to {version}.",
+			"update.filesDone": "Plugin files updated. Reload and apply patches manually when ready; the current host remains running.",
+			"update.backup": "Backup: {path}",
 			"update.restarting": "Restored the old patches, wrote the new ones, and restarting…",
 			"update.fullQuit": "Patches are written. Click Restart and the client opens again by itself.",
 			"restart.official.title": "Restart required",
@@ -1478,6 +1482,8 @@ body:not([data-ds-dark-theme]) .dshp-auth-ops button.primary{background:var(--ds
 				if (d.pinned && d.hasUpdate) text = tr("update.pinned", { version, remote });
 				if (kind === "switched" || kind === "channel") text = tr("update.switched", { version: d.localVersion || d.remoteVersion || "—" });
 				if (kind === "done") text = tr("update.done", { version: d.localVersion || d.remoteVersion || "—" });
+				if (d.filesUpdated || d.needsApply) text = d.message || tr("update.filesDone");
+				if ((d.filesUpdated || d.needsApply) && d.backupPath) text += "\n" + tr("update.backup", { path: d.backupPath });
 				if (d.error) text = d.error;
 				setUpdateNotice({ kind: d.ok === false || d.error ? "error" : "ok", text });
 			}, []);
@@ -1512,6 +1518,7 @@ body:not([data-ds-dark-theme]) .dshp-auth-ops button.primary{background:var(--ds
 					.then((d) => {
 						if (!d || (d.ok === false && d.error)) throw new Error((d && d.error) || "update failed");
 						applyUpdateInfo(d, tr, kind);
+						if (d.filesUpdated || d.needsApply) return d;
 						if (d.needsFullQuit) {
 							suppressRestartAsk.current = false;
 							setAskRestart(true);
@@ -1544,7 +1551,7 @@ body:not([data-ds-dark-theme]) .dshp-auth-ops button.primary{background:var(--ds
 
 			const doUpdate = useCallback((id) => {
 				const lane = id === "beta" ? "beta" : "stable";
-				postUpdate({ op: "apply", ref: lane === "beta" ? "beta" : "master", channel: lane }, "done", id).catch(() => {});
+				postUpdate({ op: "apply", channel: lane }, "done", id).catch(() => {});
 			}, [postUpdate]);
 
 			const changeChannel = useCallback((next) => {
@@ -7150,11 +7157,8 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
     }
 
     /**
-     * 版本显示 + 自动更新按钮。
-     *
-     * 行为：挂载时静默查一次最新版本（npm registry），有新版本就把按钮点亮成
-     * 「有新版本 vX」；点击弹出确认框（当前版本 / 最新版本 / 安装位置 / 阻塞项），
-     * 确认后由 host 侧执行 安装 → 重启 dsh web（页面会断开，重启后刷新即可）。
+     * 版本显示 + 手动更新按钮。两个面板共用受保护的 fork 更新器。
+     * 更新只替换插件文件，显示备份位置，宿主重载与 Apply 由用户稍后执行。
      */
     function VersionBar(props) {
       const [info, setInfo] = React.useState(null)
@@ -7162,14 +7166,13 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
       const [busy, setBusy] = React.useState(false)
       const [open, setOpen] = React.useState(false)
       const [msg, setMsg] = React.useState(null)
-      const [countdown, setCountdown] = React.useState(0)
 
       const check = (silent) => {
         if (!silent) setBusy(true)
         api({ op: 'updateCheck' }).then((r) => {
           setBusy(false)
           if (!r || r.ok === false) {
-            /* 开发态或查不到 registry：只显示当前版本，不报错打扰用户 */
+            /* 检查失败时保留当前版本；用户手动检查会看到错误。 */
             if (!silent) setErr((r && r.error) || '检查更新失败')
             api({ op: 'version' }).then((v) => { if (v && v.ok !== false) setInfo(v) }, () => {})
             return
@@ -7187,18 +7190,15 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
       const apply = () => {
         setBusy(true)
         setMsg(null)
-        api({ op: 'updateApply', target: (info && info.latest) || undefined }).then((r) => {
+        api({ op: 'updateApply' }).then((r) => {
           setBusy(false)
-          if (!r || r.ok === false) { setMsg({ err: (r && r.error) || '更新失败' }); return }
-          setMsg({ ok: '已安装 ' + (r.installed || '') + '，正在重启当前宿主…' })
-          /* 重启会断开这个页面：倒计时提示用户稍后刷新 */
-          setCountdown(6)
-          const t = setInterval(() => {
-            setCountdown((n) => {
-              if (n <= 1) { clearInterval(t); window.location.reload(); return 0 }
-              return n - 1
-            })
-          }, 1000)
+          if (!r || r.ok === false) {
+            setMsg({ err: ((r && r.error) || '更新失败') + (r && r.backupPath ? '\n备份：' + r.backupPath : '') })
+            return
+          }
+          setMsg({ ok: (r.message || r.note || '插件文件已更新；请在需要时手动重新加载并应用补丁。')
+            + (r.backupPath ? '\n备份：' + r.backupPath : '') })
+          setInfo((previous) => Object.assign({}, previous || {}, { updateAvailable: false }))
         }, (e) => { setBusy(false); setMsg({ err: String((e && e.message) || e) }) })
       }
 
@@ -7220,16 +7220,19 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
           ? h('button', {
               className: 'rt-btn rt-btn-primary', disabled: busy,
               onClick: () => { setOpen(true); setMsg(null) },
-              title: '发现新版本 ' + latest + '：点击查看并一键更新（会重启当前宿主）',
-            }, busy ? '检查中…' : '有新版本 v' + latest)
+              title: '发现更新 ' + latest + '：查看来源并备份更新插件文件',
+            }, busy ? '检查中…' : '有更新 ' + latest)
           : h('button', {
               className: 'rt-btn', disabled: busy, onClick: () => check(false),
-              title: '重新检查 npm 上的最新版本',
+              title: '检查个人 fork 的新提交',
             }, busy ? '检查中…' : '检查更新'),
         open
           ? h('div', { className: 'rt-modal', 'aria-hidden': 'true', onClick: () => setOpen(false) },
               h('div', { className: 'rt-modal-box', onClick: (e) => e.stopPropagation() },
-                h('h4', { style: { marginTop: 0 } }, '更新 RedTeam 模式'),
+                h('h4', { style: { marginTop: 0 } }, '更新插件文件'),
+                info && info.sourceRepository
+                  ? h('div', { className: 'rt-kv' }, h('b', null, '更新来源'), h('span', { className: 'rt-mono' }, info.sourceRepository + ' / ' + (info.sourceRef || '')))
+                  : null,
                 h('div', { className: 'rt-kv' }, h('b', null, '当前版本'), h('span', null, current || '未知')),
                 h('div', { className: 'rt-kv' }, h('b', null, '最新版本'), h('span', null, latest || '未知')),
                 h('div', { className: 'rt-kv' }, h('b', null, '安装方式'),
@@ -7246,20 +7249,17 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
                   ? h('div', { className: 'rt-foot', style: { padding: '4px 0' } }, notes.map((n, i) => h('div', { key: 'n' + i }, n)))
                   : null,
                 h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', margin: '8px 0' } },
-                  '更新过程：安装新版本 → 自动重启当前宿主（官方 exe / 社区版 / dsh web；当前页面会断开，约 5–10 秒后自动刷新）。'
-                  + '重启前会检查有没有智能体在跑，有就拦住不动。'),
+                  '更新过程：校验来源和文件 → 创建备份 → 更新插件文件；失败时尝试恢复备份。'
+                  + '完成后请在需要时手动重新加载并应用补丁。更新不会自动重启宿主；有智能体在运行时会等待任务结束。'),
                 msg ? h('div', { className: msg.err ? 'rt-err' : 'rt-foot' }, msg.err || msg.ok) : null,
-                countdown > 0
-                  ? h('div', { className: 'rt-foot' }, '宿主正在重启，' + countdown + ' 秒后自动刷新页面…')
-                  : null,
                 h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 } },
                   h('button', { className: 'rt-btn', onClick: () => setOpen(false) }, '关闭'),
                   h('button', {
                     className: 'rt-btn rt-btn-primary',
-                    disabled: busy || blockers.length > 0 || mode === 'dev',
-                    title: mode === 'dev' ? '开发态安装请用仓库流程升级' : blockers.length ? '先解决上面的阻塞项' : '安装并重启',
+                    disabled: busy || blockers.length > 0,
+                    title: blockers.length ? '先解决上面的阻塞项' : '备份并更新插件文件',
                     onClick: apply,
-                  }, busy ? '更新中…' : '一键更新并重启'))))
+                  }, busy ? '更新中…' : '备份并更新'))))
           : null)
     }
 
